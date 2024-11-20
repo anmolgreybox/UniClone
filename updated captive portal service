@@ -1,0 +1,700 @@
+package ca.greybox.uni;
+
+
+import android.graphics.Color;
+import android.graphics.drawable.Drawable;
+
+import android.os.Build;
+import android.os.Environment;
+import android.util.Log;
+import android.view.Gravity;
+import android.view.View;
+import android.widget.TextView;
+
+import androidx.constraintlayout.widget.ConstraintLayout;
+import androidx.constraintlayout.widget.ConstraintSet;
+import androidx.core.content.ContextCompat;
+
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+/* unused
+import android.net.wifi.WifiConfiguration.KeyMgmt;
+import java.io.FileOutputStream;
+import java.io.DataOutputStream;
+import java.io.BufferedOutputStream;
+import android.os.Environment;
+import android.util.Log;
+import ca.greybox.uni.Tools.*;
+//import androidx.core.content.res.ResourcesCompat; //related to updating get drawable
+*/
+
+/*
+ * handles DNS, HTTP web server, Hotspot, Kiwix web server,
+ */
+
+public class CaptivePortalService {
+    //static String SU_WRAPPER_CMD = "su -c \"";
+    //static String WRAPPER_QUOTE = "\"";
+
+
+    static String FilesPath = Environment.getDataDirectory() + "/data/ca.greybox.uni/files";
+
+    ConstraintLayout parentLayout;
+    ConstraintSet set;
+    Drawable success;
+    Drawable failure;
+    MainActivity mainActivity;
+    TextView hotspotOn, dnsmasqOn, httpOn, analyticsOn, kiwixOn;
+    //Do not hardcode "/sdcard/"; use `Environment.getExternalStorageDirectory().getPath()` instead
+    ///storage/emulated/0 (sample output)
+
+    static final String logFile =  Environment.getExternalStorageDirectory().getPath()+"/uni/logs/capstart.log";
+    static final String accessLog = Environment.getExternalStorageDirectory().getPath()+"/uni/logs/access.log";
+    static final String analyticsHtml = Environment.getExternalStorageDirectory().getPath()+"/uni/www/dashboard/analyticCharts.html";
+    List<TextView> viewList = new ArrayList<>();
+    /* unused variables
+        //static String hotspotWait = "3";
+        //static String[] commands;
+     */
+    static String command;
+
+
+    public CaptivePortalService(String FilesPath, View view, MainActivity mainActivity) {
+
+        CaptivePortalService.FilesPath = FilesPath;
+        this.parentLayout = (ConstraintLayout) view;
+        this.success = ContextCompat.getDrawable(parentLayout.getContext(), R.drawable.success);
+        assert success != null;
+        success.setBounds(0, 0, 20, 20);
+        this.failure = ContextCompat.getDrawable(parentLayout.getContext(), R.drawable.failure);
+        assert failure != null;
+        failure.setBounds(0, 0, 20, 20);
+        this.set = new ConstraintSet();
+        this.mainActivity = mainActivity;
+        hotspotOn = new TextView(parentLayout.getContext());
+        dnsmasqOn = new TextView(parentLayout.getContext());
+        httpOn = new TextView(parentLayout.getContext());
+        analyticsOn = new TextView(parentLayout.getContext());
+        kiwixOn = new TextView(parentLayout.getContext());
+        TextView previousTextView = null;
+        for (TextView tv : viewList) {
+            addView(tv, previousTextView);
+            previousTextView = tv;
+        }
+
+    }
+
+
+    public boolean startService() {
+        try {
+            if(Build.VERSION.SDK_INT>28) {
+                startDnsmasq(); //required for android 10 unsure why (MJ)
+            }
+            command = "date > " + logFile;
+            Tools.exec(command);
+            parentLayout.removeAllViewsInLayout();
+            TextView tv = null;
+            startDnsmasq();
+            tv = createTextView("Hotspot", hotspotOn, tv);
+            if (!checkHotspot()) {
+                if (startHotspot()) {
+
+                    setSuccess(tv);
+                }
+                else
+                    setFailure(tv);
+            } else {
+                setSuccess(tv);
+            }
+
+            if (checkDnsmasqNative()) {
+                stopDnsmasq();
+            }
+            if (checkHttpServer())
+                stopHttpServer();
+
+            if (checkGoAccessServer())
+                stopGoAccessServer();
+
+            if (checkKiwixServer())
+                stopKiwixServer();
+
+            tv = createTextView("dnsmasq", dnsmasqOn, tv);
+            if (startDnsmasq()) {
+                Log.d("success", "DNS success");
+                setSuccess(tv);
+            }
+            else {
+                Log.d("error", "DNS Failure");
+                setFailure(tv);
+            }
+            tv = createTextView("Http server", httpOn, tv);
+            if (startHttpServer())
+                setSuccess(tv);
+            else
+                setFailure(tv);
+
+            tv = createTextView("Analytics server", analyticsOn, tv);
+            if (startGoAccessServer())
+                setSuccess(tv);
+            else
+                setFailure(tv);
+
+            tv = createTextView("Kiwix server", kiwixOn, tv);
+            if (startKiwixServer())
+                setSuccess(tv);
+            else
+                setFailure(tv);
+
+        } catch (IOException | InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        return true;
+    }
+
+    public static boolean startServiceStatic() {
+        try {
+            if(Build.VERSION.SDK_INT>28) {
+                startDnsmasq(); //required for android 10 unsure why (MJ)
+            }
+            command = "echo `date` 'boot' >> " + logFile;
+            Tools.exec(command);
+            if (!checkHotspot())
+                startHotspot();
+
+            if (checkDnsmasqNative()) {
+                stopDnsmasq();
+            }
+
+            if (checkHttpServer()) {
+                stopHttpServer();
+            }
+
+            if (checkGoAccessServer())
+                stopGoAccessServer();
+
+            if (checkDnsmasqNative())
+                stopDnsmasq();
+
+            if (checkKiwixServer())
+                stopKiwixServer();
+
+            startDnsmasq();
+            startHttpServer();
+            startGoAccessServer();
+            startKiwixServer();
+
+        } catch (IOException | InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        return true;
+    }
+
+
+    public void stopService(boolean allServices) {
+        try {
+            if (allServices) {
+                stopHotspot();
+            }
+            stopDnsmasq();
+            stopHttpServer();
+            stopGoAccessServer();
+            stopKiwixServer();
+            parentLayout.removeAllViewsInLayout();
+        } catch (InterruptedException | IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void onMoodleSetupClick(View view) {
+        if (CaptivePortalService.setupMoodle()) {
+            Toast.makeText(this, "Moodle setup completed successfully!", Toast.LENGTH_SHORT).show();
+        } else {
+            Toast.makeText(this, "Moodle setup failed.", Toast.LENGTH_SHORT).show();
+        }
+    }
+    
+
+    /**renderService()
+     * Check and Render hotspot, dnsmsq, http, goAccess and Kiwix server status
+     * renders:green checkmark or red cross
+     * @return true all services are working
+     *         false if any service is not working
+     */
+    public boolean renderServices() {
+        boolean allServerRunning = true;
+        try {
+            parentLayout.removeAllViewsInLayout();
+            TextView tv = null;
+            tv = createTextView("Hotspot", hotspotOn, tv);
+            if (checkHotspot()) {
+                setSuccess(tv);
+            } else {
+                setFailure(tv);
+                allServerRunning = false;
+            }
+            tv = createTextView("dnsmasq", dnsmasqOn, tv);
+            if (checkDnsmasq()) {
+                setSuccess(tv);
+            } else {
+                setFailure(tv);
+                allServerRunning = false;
+            }
+            tv = createTextView("Http server", httpOn, tv);
+            if (checkHttpServer()) {
+                setSuccess(tv);
+            } else {
+                setFailure(tv);
+                allServerRunning = false;
+            }
+            tv = createTextView("Analytics server", analyticsOn, tv);
+            if (checkGoAccessServer()) {
+                setSuccess(tv);
+            } else {
+                setFailure(tv);
+                allServerRunning = false;
+            }
+            tv = createTextView("Kiwix server", kiwixOn, tv);
+            if (checkKiwixServer()) {
+                setSuccess(tv);
+            } else {
+                setFailure(tv);
+                allServerRunning = false;
+            }
+
+        } catch (IOException | InterruptedException e) {
+            e.printStackTrace();
+        }
+        return allServerRunning;
+    }
+
+    public static boolean setupMoodle() {
+        try {
+            // Commands to install PHP and MariaDB
+            Tools.exec("pkg install php -y");
+            Tools.exec("pkg install mariadb -y");
+            Tools.exec("pkg update");
+    
+            // Commands to download Moodle
+            String moodleDownloadPath = "/sdcard/Download/moodle-latest.tgz";
+            Tools.exec("wget -O " + moodleDownloadPath + " https://download.moodle.org/releases/latest/moodle-latest.tgz");
+            Tools.exec("tar -xvf " + moodleDownloadPath + " -C /sdcard/uni/www/");
+    
+            // Start MariaDB server
+            Tools.exec("mariadbd-safe &");
+            Tools.exec("sleep 5");
+    
+            // Set up MariaDB for Moodle
+            Tools.exec("mariadb -u root -p -e \"CREATE DATABASE moodle;\"");
+            Tools.exec("mariadb -u root -p -e \"GRANT ALL ON moodle.* TO 'moodleuser'@'localhost' IDENTIFIED BY 'TESTpassword';\"");
+            Tools.exec("mariadb -u root -p -e \"FLUSH PRIVILEGES;\"");
+    
+            // Update Moodle configuration
+            String configFilePath = "/sdcard/uni/www/moodle/config.php";
+            Tools.exec("echo \"<?php\\n" +
+                    "$CFG->wwwroot = 'http://192.168.1.1/moodle';\\n" +
+                    "$CFG->dataroot = '/sdcard/uni/moodledata';\\n" +
+                    "$CFG->dbtype = 'mariadb';\\n" +
+                    "$CFG->dbhost = 'localhost';\\n" +
+                    "$CFG->dbname = 'moodle';\\n" +
+                    "$CFG->dbuser = 'moodleuser';\\n" +
+                    "$CFG->dbpass = 'TESTpassword';\\n" +
+                    "$CFG->prefix = 'mdl_';\\n" +
+                    "require_once('/sdcard/uni/www/moodle/lib/setup.php');\" > " + configFilePath);
+    
+            // Restart services
+            stopServiceStatic();
+            startServiceStatic();
+    
+            return true; // Success
+        } catch (Exception e) {
+            Log.e("MoodleSetup", "Error during Moodle setup", e);
+            return false;
+        }
+    }
+    
+
+    public static boolean changeHttpHostname(String hostname) {
+        return setEnvVar("host_name", hostname);
+    }
+
+    public static boolean changeZimUrl(String zimurl, String zimfile) {
+        return setEnvVar("zim_url", zimurl) && setEnvVar("zim_file", zimfile);
+    }
+
+
+    public static boolean changeHtmlDirUrl(String htmlurl, String hostdir) {
+        return setEnvVar("html_url", htmlurl) && setEnvVar("html_dir", hostdir);
+    }
+
+    private static boolean startHotspot() throws IOException, InterruptedException {
+
+
+        command = "echo -e `date` '[start hotspot]' >> " + logFile;
+        Tools.exec(command);
+        command = "service call connectivity 24 i32 0 i32 1 i32 0 s16 text && sleep 5";
+        return Tools.exec(command);
+    }
+
+    public static void stopHotspot() throws IOException, InterruptedException {
+        command = "service call connectivity 25 i32 0 i32 1 i32 0 s16 text";
+        Tools.exec(command);
+    }
+
+
+    private static boolean checkHotspot() throws IOException, InterruptedException {
+        command = "iw wlan0 info | grep \"type AP\" -q";
+        return Tools.exec(command);
+    }
+
+
+    private static boolean startHttpServer() throws IOException, InterruptedException {
+        command = "echo -e `date` '[start http server]' >> " + logFile;
+        Tools.exec(command);
+        String command = "set -o allexport; source " + FilesPath + "/conf/lighttpd.env" + " && " + FilesPath + "/bin/lighttpd -f " +
+                FilesPath + "/conf/lighttpd.conf" + " 2>&1 >> " + logFile;
+
+        return Tools.exec(command);
+    }
+
+    private static void stopHttpServer() throws IOException, InterruptedException {
+        command = "echo -e `date` '[kill http server]' >> " + logFile;
+        Tools.exec(command);
+
+        String command = "killall lighttpd";
+        // String test="su `killall lighttpd`";
+        // System.out.println(   test.replace('`','"'));
+        Tools.exec(command);
+    }
+
+    private static boolean checkHttpServer() throws IOException, InterruptedException {
+        String command = "pgrep lighttpd -P 1";
+        return Tools.exec(command);
+    }
+
+    private static boolean startGoAccessServer() throws IOException, InterruptedException {
+        command = "echo -e `date` '[start analytics server]' >> " + logFile;
+        Tools.exec(command);
+        String command = FilesPath + "/bin/goaccess --html-prefs='{\"showTables\":true}' --log-format=COMBINED --daemonize -p " +
+                FilesPath + "/conf/goaccess.conf --real-time-html -o  " + analyticsHtml + " " + accessLog + "";
+        return Tools.exec(command);
+    }
+
+    private static void stopGoAccessServer() throws IOException, InterruptedException {
+        command = "echo -e `date` '[kill analytics server]' >> " + logFile;
+        Tools.exec(command);
+        String command = "killall goaccess";
+        Tools.exec(command);
+    }
+
+    private static boolean checkGoAccessServer() throws IOException, InterruptedException {
+        String command = "pgrep goaccess -P 1";
+        return Tools.exec(command);
+    }
+
+    //TODO implementation
+    private static boolean startDnsmasq() throws IOException, InterruptedException {
+        command = "echo -e `date` '[start dnsmasq]' >> " + logFile;
+        Tools.exec(command);
+        String command = "ip address add 192.168.43.1/24 dev wlan0";
+
+        Tools.exec(command);
+        command = "dnsmasq -x " +
+                FilesPath + "/dns.pid " +
+                "--interface=wlan0 " +
+                "--address=/#/198.54.114.197 " +
+                "--dhcp-range=192.168.43.2,192.168.43.30,255.255.255.0,12h " +
+                "--dhcp-option=3,192.168.43.1 " +
+                "--dhcp-option=6,192.168.43.1 " +
+                "--server=8.8.8.8 " +
+
+                "--listen-address=0.0.0.0 && iptables -F && iptables -t nat -A PREROUTING -d 198.54.114.197 -j DNAT --to 192.168.43.1";
+
+        return Tools.exec(command);
+    }
+
+    private static void stopDnsmasq() throws IOException, InterruptedException {
+        command = "echo -e `date` '[kill dnsmasq server]' >> " + logFile;
+        Tools.exec(command);
+        String command = "killall dnsmasq";
+        Tools.exec(command);
+    }
+
+    private static boolean checkDnsmasq() throws IOException, InterruptedException {
+        String command = "pgrep dnsmasq -p 1";
+
+        return Tools.exec(command);
+    }
+
+    private static boolean checkDnsmasqNative() throws IOException, InterruptedException {
+        String command = "pgrep dnsmasq";
+
+        return Tools.exec(command);
+    }
+
+    private static boolean startKiwixServer() throws IOException, InterruptedException {
+        command = "echo -e `date` '[start kiwix server]' >> " + logFile;
+        Tools.exec(command);
+
+        String fileManagerDirectory = Environment.getExternalStorageDirectory().getAbsolutePath() + "/uni/www/content/";
+        command = "find " + fileManagerDirectory + " /mnt/media_rw/ -not -path '*/.*' -name \"[!.]*.zim\" -print0 | xargs -0 " + FilesPath + "/bin/kiwix-serve -r /kiwix -d -p 8080";
+        return Tools.exec(command);
+    }
+
+    private static void stopKiwixServer() throws IOException, InterruptedException {
+        command = "echo -e `date` '[kill kiwix server]' >> " + logFile;
+        Tools.exec(command);
+        String command = "killall kiwix-serve";
+        Tools.exec(command);
+    }
+
+    private static boolean checkKiwixServer() throws IOException, InterruptedException {
+        String command = "pgrep kiwix-serve -P 1";
+
+        return Tools.exec(command);
+    }
+
+
+    private TextView createTextView(String text, TextView textView, TextView previousTextView) {
+        textView.setText(text);
+        textView.setPadding(5, 5, 5, 5);
+        textView.setGravity(Gravity.CENTER);
+        textView.setTextColor(Color.parseColor("#FFFFFF"));
+        textView.setId(View.generateViewId());
+        textView.setCompoundDrawablePadding(10);
+        textView.setCompoundDrawables(null, null, null, null);
+        addView(textView, previousTextView);
+        viewList.add(textView);
+        return textView;
+    }
+
+    private void setSuccess(TextView textView) {
+        mainActivity.runOnUiThread(
+                () -> textView.setCompoundDrawables(success, null, null, null)
+        );
+
+    }
+
+    private void setFailure(TextView textView) {
+        mainActivity.runOnUiThread(
+                () -> textView.setCompoundDrawables(failure, null, null, null)
+        );
+
+    }
+
+    /*private static  boolean exec(String command) throws IOException,InterruptedException {
+            Process p = Runtime.getRuntime().exec(Tools.getSuPath());
+            DataOutputStream outputStream = new DataOutputStream(p.getOutputStream());
+            outputStream.writeBytes(command + " && exit 0 || exit 1\n");
+            outputStream.flush();
+            return p.waitFor()==0;
+    }*/
+
+    private void addView(TextView textView, TextView previousTextView) {
+        mainActivity.runOnUiThread(
+                () -> {
+                    parentLayout.addView(textView, 0);
+                    set.clone(parentLayout);
+
+                    if (previousTextView == null)
+                        set.connect(textView.getId(), ConstraintSet.TOP, parentLayout.getId(), ConstraintSet.TOP);
+                    else
+                        set.connect(textView.getId(), ConstraintSet.TOP, previousTextView.getId(), ConstraintSet.BOTTOM);
+
+                    set.connect(textView.getId(), ConstraintSet.LEFT, parentLayout.getId(), ConstraintSet.LEFT);
+                    set.applyTo(parentLayout);
+                }
+        );
+    }
+
+    private static boolean setEnvVar(String key, String value) {
+        String path = FilesPath + "/conf/";
+        String tmpFileName = "lighttpd.env" + ".tmp";
+        boolean keyFound = false;
+
+        BufferedReader br = null;
+        BufferedWriter bw = null;
+        try {
+            br = new BufferedReader(new FileReader(path + "lighttpd.env"));
+            bw = new BufferedWriter(new FileWriter(path + tmpFileName));
+            String line;
+            while ((line = br.readLine()) != null) {
+                if (line.contains(key)) {
+                    line = key + "=" + value;
+                    keyFound = true;
+                }
+                bw.write(line + "\n");
+            }
+            if (!keyFound) {
+                line = key + "=" + value;
+                bw.write(line + "\n");
+            }
+        } catch (Exception e) {
+            return false;
+        } finally {
+            try {
+                if (br != null) br.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            try {
+                if (bw != null) bw.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        // Once everything is complete, delete old file
+        File oldFile = new File(path + "lighttpd.env");
+        if (!oldFile.delete()) {
+            System.out.println("ERR:COULD NOT DELETE");
+        }
+
+        // And rename tmp file's name to old file name
+        File newFile = new File(path + tmpFileName);
+        if (!newFile.renameTo(oldFile)) {
+            System.out.println("ERR:COULD NOT RENAME");
+        }
+
+        return true;
+    }
+
+    public static void addToHosts(String hostname) {
+        String path = FilesPath;
+        String fileName = "hosts";
+        String ip = "192.168.43.1";
+        String defaultHostname = "grey.box";
+
+        boolean keyFound = false;
+        try {
+            // mount with read and write permissions
+            Process process = Runtime.getRuntime().exec(Tools.getSuPath());
+            DataOutputStream os = new DataOutputStream(process.getOutputStream());
+
+            String mount = Build.VERSION.SDK_INT>28 ? "mount -o rw,remount /system\n" : "mount -o rw,remount /\n";
+            os.writeBytes( mount);
+            os.flush();
+
+            BufferedReader br = null;
+            BufferedWriter bw = null;
+
+            br = new BufferedReader(new FileReader("/system/etc/hosts"));
+            bw = new BufferedWriter(new FileWriter(path + "/" + fileName));
+
+            String line;
+            while ((line = br.readLine()) != null) {
+                if (line.contains(ip)) {
+                    if (!line.contains("grey.box") && !hostname.equals("grey.box")) {
+                        line = ip + "\t" + hostname;
+                        keyFound = true;
+                    } else if (line.contains("grey.box") && hostname.equals("grey.box")) {
+                        keyFound = true;
+                    }
+                }
+                bw.write(line + "\n");
+            }
+            if (!keyFound) {
+                line = ip + "\t" + hostname;
+                bw.write(line + "\n");
+            }
+            if (br != null) br.close();
+            if (bw != null) bw.close();
+
+            os.writeBytes("mv /data/data/ca.greybox.uni/files/hosts /system/etc\n");
+            os.flush();
+            os.writeBytes("chown root:root /system/etc/hosts\n");
+            os.flush();
+            os.writeBytes("chmod 644 /system/etc/hosts\n");
+            os.flush();
+
+            String umount = Build.VERSION.SDK_INT>28 ? "umount /system\n" : "umount /\n";
+            os.writeBytes( umount);
+            os.flush();
+            os.close();
+            process.waitFor();
+        } catch (IOException e) {
+            e.printStackTrace();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+    }
+
+    /*
+        public static void softapConf(String SSID,String preSharedKey) {
+            //DataInputStream in = null;
+            String filename = FilesPath+ "/softap.conf";
+            int AP_CONFIG_FILE_VERSION = 2;
+            int apBand = 0;
+            int apChannel = 0;
+            int authType = 0;
+            if (preSharedKey!=null){
+                authType = 4;
+            }
+            //Runtime.getRuntime().exec(SU_WRAPPER_CMD + "cp /data/misc/wifi/softap.conf " + FilesPath + "/").waitFor();
+            //Runtime.getRuntime().exec(SU_WRAPPER_CMD + "chmod 777 " + filename).waitFor();
+            /*in = new DataInputStream(
+                    new BufferedInputStream(new FileInputStream(filename)));
+            System.out.print("vesrion: ");
+            System.out.println(in.readInt());
+            System.out.print("ssid: ");
+            System.out.println(in.readUTF());
+            System.out.print("apband: ");
+            System.out.println(in.readInt());
+            System.out.print("apchannel: ");
+            System.out.println(in.readInt());
+            System.out.print("authtype: ");
+            System.out.println(in.readInt());
+            System.out.print("passwd: ");
+            System.out.println(in.readUTF());
+            in.close();*/
+/*
+        try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(
+                new FileOutputStream(filename)))) {
+            out.writeInt(AP_CONFIG_FILE_VERSION);
+            out.writeUTF(SSID);
+            out.writeInt(apBand);
+            out.writeInt(apChannel);
+            out.writeInt(authType);
+            if (authType != KeyMgmt.NONE) {
+                out.writeUTF(preSharedKey);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        try {
+            command = "mv " + filename + " /data/misc/wifi/";
+            Tools.exec(command);
+            Tools.exec("chown wifi:wifi /data/misc/wifi/softap.conf && chmod 660 /data/misc/wifi/softap.conf");
+            startServiceStatic();
+            Tools.exec("reboot");
+        } catch (InterruptedException | IOException e) {
+            e.printStackTrace();
+        }
+
+
+    }
+    */
+
+    public static void restartKiwix(){
+        try {
+            stopKiwixServer();
+            Tools.exec("sleep 0.5");
+            startKiwixServer();
+        } catch (IOException | InterruptedException e) {
+            e.printStackTrace();
+        }
+
+    }
+
+}
