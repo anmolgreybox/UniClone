@@ -1,0 +1,44 @@
+public static boolean setupMoodle() {
+    try {
+        // Commands to install PHP and MariaDB
+        Tools.exec("pkg install php -y");
+        Tools.exec("pkg install mariadb -y");
+        Tools.exec("pkg update");
+
+        // Commands to download Moodle
+        String moodleDownloadPath = "/sdcard/Download/moodle-latest.tgz";
+        Tools.exec("wget -O " + moodleDownloadPath + " https://download.moodle.org/releases/latest/moodle-latest.tgz");
+        Tools.exec("tar -xvf " + moodleDownloadPath + " -C /sdcard/uni/www/");
+
+        // Start MariaDB server
+        Tools.exec("mariadbd-safe &");
+        Tools.exec("sleep 5");
+
+        // Set up MariaDB for Moodle
+        Tools.exec("mariadb -u root -p -e \"CREATE DATABASE moodle;\"");
+        Tools.exec("mariadb -u root -p -e \"GRANT ALL ON moodle.* TO 'moodleuser'@'localhost' IDENTIFIED BY 'TESTpassword';\"");
+        Tools.exec("mariadb -u root -p -e \"FLUSH PRIVILEGES;\"");
+
+        // Update Moodle configuration
+        String configFilePath = "/sdcard/uni/www/moodle/config.php";
+        Tools.exec("echo \"<?php\\n" +
+                "$CFG->wwwroot = 'http://192.168.1.1/moodle';\\n" +
+                "$CFG->dataroot = '/sdcard/uni/moodledata';\\n" +
+                "$CFG->dbtype = 'mariadb';\\n" +
+                "$CFG->dbhost = 'localhost';\\n" +
+                "$CFG->dbname = 'moodle';\\n" +
+                "$CFG->dbuser = 'moodleuser';\\n" +
+                "$CFG->dbpass = 'TESTpassword';\\n" +
+                "$CFG->prefix = 'mdl_';\\n" +
+                "require_once('/sdcard/uni/www/moodle/lib/setup.php');\" > " + configFilePath);
+
+        // Restart services
+        stopServiceStatic();
+        startServiceStatic();
+
+        return true; // Success
+    } catch (Exception e) {
+        Log.e("MoodleSetup", "Error during Moodle setup", e);
+        return false;
+    }
+}
