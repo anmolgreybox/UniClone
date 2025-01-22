@@ -280,6 +280,7 @@ public class CaptivePortalService {
 
     public static boolean setupMoodle() {
         try {
+            // THIS IS WHAT GETS PUT INTO TERMUX
             // Commands to install PHP and MariaDB
             Tools.exec("pkg install php -y");
             Tools.exec("pkg install mariadb -y");
