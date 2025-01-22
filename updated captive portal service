@@ -280,6 +280,8 @@ public class CaptivePortalService {
 
     public static boolean setupMoodle() {
         try {
+            // this makes a mariadb
+            //Connection connection = DriverManager.getConnection("jdbc:mariadb://localhost:3306/database_name", "user", "password");
             // THIS IS WHAT GETS PUT INTO TERMUX
             // Commands to install PHP and MariaDB
             Tools.exec("pkg install php -y");
@@ -699,3 +701,4 @@ public class CaptivePortalService {
     }
 
 }
+
